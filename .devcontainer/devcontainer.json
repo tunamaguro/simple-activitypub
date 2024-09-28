@@ -18,6 +18,7 @@
                 "rust-analyzer.checkOnSave.command": "clippy"
             },
             "extensions": [
+                "rust-lang.rust-analyzer",
                 "vadimcn.vscode-lldb",
                 "mutantdino.resourcemonitor",
                 "matklad.rust-analyzer",

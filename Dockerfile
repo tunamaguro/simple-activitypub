@@ -19,3 +19,4 @@ RUN echo "source <( rustup completions bash cargo )" >> /home/vscode/.bashrc
 USER ${USERNAME}
 
 RUN rustup component add rustfmt clippy
+RUN cargo install cargo-watch
