@@ -18,11 +18,12 @@
                 "rust-analyzer.checkOnSave.command": "clippy"
             },
             "extensions": [
+                "rust-lang.rust-analyzer",
                 "vadimcn.vscode-lldb",
                 "mutantdino.resourcemonitor",
                 "matklad.rust-analyzer",
                 "tamasfe.even-better-toml",
-                "serayuzgur.crates",
+                "fill-labs.dependi",
                 "mhutchie.git-graph",
             ]
         }
