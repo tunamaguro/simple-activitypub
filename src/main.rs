@@ -1,6 +1,11 @@
 use std::time::Duration;
 
-use axum::{http::header, response::IntoResponse, routing::get, Json, Router};
+use axum::{
+    http::{header, HeaderValue},
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{normalize_path::NormalizePathLayer, timeout::TimeoutLayer, trace::TraceLayer};
@@ -70,8 +75,15 @@ async fn person_handler() -> impl IntoResponse {
             }
         }
     );
-
-    ([(header::CONTENT_TYPE, "application/activity+json")], Json(res))
+    // Activity Stream document mime-type must be `application/activity+json`
+    // See https://www.w3.org/TR/activitystreams-core/#h-syntaxconventions
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/activity+json"),
+        )],
+        Json(res),
+    )
 }
 
 #[tokio::main]
