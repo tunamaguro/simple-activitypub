@@ -1,16 +1,87 @@
 use std::time::Duration;
 
-use axum::{routing::get, Router};
+use axum::{http::header, response::IntoResponse, routing::get, Json, Router};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{normalize_path::NormalizePathLayer, timeout::TimeoutLayer, trace::TraceLayer};
+
+const BASE_SERVER_URI: &str = "c0becd579a6677ee42ce067be08e544d.serveo.net";
+
+#[tracing::instrument]
+#[axum_macros::debug_handler]
+async fn node_info() {}
+
+#[tracing::instrument]
+#[axum_macros::debug_handler]
+async fn host_meta() -> impl IntoResponse {
+    let xml = format!(
+        r#"<?xml version="1.0"?>
+<XRD xmlns="http://docs.oasis-open.org/ns/xri/xrd-1.0">
+    <Link rel="lrdd" type="application/xrd+xml" template="https://{}/.well-known/webfinger?resource={{uri}}" />
+</XRD>
+"#,
+        BASE_SERVER_URI
+    );
+
+    ([(header::CONTENT_TYPE, "application/xml")], xml)
+}
+
+#[tracing::instrument]
+#[axum_macros::debug_handler]
+async fn webfinger() -> impl IntoResponse {
+    let res = serde_json::json!(
+        {
+            "subject": format!("acct:alice@{}",BASE_SERVER_URI),
+
+            "links": [
+                {
+                    "rel": "self",
+                    "type": "application/activity+json",
+                    "href": format!("https://{}/actor",BASE_SERVER_URI)
+                }
+            ]
+        }
+    );
+
+    Json(res)
+}
+// NOTE: Do not use these implementation at production!!
+const PUBLIC_ACTOR_KEY: &str = include_str!("./actorKey/public.pem");
+const PRIVATE_ACTOR_KEY: &str = include_str!("./actorKey/private.pem");
+#[tracing::instrument]
+#[axum_macros::debug_handler]
+async fn person_handler() -> impl IntoResponse {
+    let res = serde_json::json!(
+        {
+            "@context": [
+                "https://www.w3.org/ns/activitystreams",
+                "https://w3id.org/security/v1"
+            ],
+
+            "id": format!("https://{}/actor",BASE_SERVER_URI),
+            "type": "Person",
+            "preferredUsername": "alice",
+            "inbox": format!("https://{}/inbox",BASE_SERVER_URI),
+
+            "publicKey": {
+                "id": format!("https://{}/actor#main-key",BASE_SERVER_URI),
+                "owner":  format!("https://{}/actor",BASE_SERVER_URI),
+                "publicKeyPem": PUBLIC_ACTOR_KEY
+            }
+        }
+    );
+
+    ([(header::CONTENT_TYPE, "application/activity+json")], Json(res))
+}
 
 #[tokio::main]
 async fn main() {
     init_tracing();
 
     let app = Router::new()
-        .route("/", get(|| async { "Hello World!" }))
+        .route("/host-meta", get(host_meta))
+        .route("/.well-known/webfinger", get(webfinger))
+        .route("/actor", get(person_handler))
         .layer(
             ServiceBuilder::new()
                 .layer(NormalizePathLayer::trim_trailing_slash())
