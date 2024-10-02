@@ -6,15 +6,16 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use openssl::{hash::{self, MessageDigest}, rsa::Padding};
 use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
-use openssl::sign::{Signer, Verifier};
+use openssl::sign::Signer;
+use openssl::{hash::MessageDigest, rsa::Padding};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{normalize_path::NormalizePathLayer, timeout::TimeoutLayer, trace::TraceLayer};
 
-const BASE_SERVER_URI: &str = "5200a6a749126c34a365ad5ce6095572.serveo.net";
+/// Your server domain
+const BASE_SERVER_DOMAIN: &str = "855cc425539871507ed31abb8c428037.serveo.net";
 
 #[tracing::instrument]
 #[axum_macros::debug_handler]
@@ -29,7 +30,7 @@ async fn host_meta() -> impl IntoResponse {
     <Link rel="lrdd" type="application/xrd+xml" template="https://{}/.well-known/webfinger?resource={{uri}}" />
 </XRD>
 "#,
-        BASE_SERVER_URI
+        BASE_SERVER_DOMAIN
     );
 
     ([(header::CONTENT_TYPE, "application/xml")], xml)
@@ -40,13 +41,13 @@ async fn host_meta() -> impl IntoResponse {
 async fn webfinger() -> impl IntoResponse {
     let res = serde_json::json!(
         {
-            "subject": format!("acct:alice@{}",BASE_SERVER_URI),
+            "subject": format!("acct:alice@{}",BASE_SERVER_DOMAIN),
 
             "links": [
                 {
                     "rel": "self",
                     "type": "application/activity+json",
-                    "href": format!("https://{}/actor",BASE_SERVER_URI)
+                    "href": format!("https://{}/actor",BASE_SERVER_DOMAIN)
                 }
             ]
         }
@@ -71,14 +72,14 @@ async fn person_handler() -> impl IntoResponse {
                 "https://w3id.org/security/v1"
             ],
 
-            "id": format!("https://{}/actor",BASE_SERVER_URI),
+            "id": format!("https://{}/actor",BASE_SERVER_DOMAIN),
             "type": "Person",
             "preferredUsername": "alice",
-            "inbox": format!("https://{}/inbox",BASE_SERVER_URI),
+            "inbox": format!("https://{}/inbox",BASE_SERVER_DOMAIN),
 
             "publicKey": {
-                "id": format!("https://{}/actor#main-key",BASE_SERVER_URI),
-                "owner":  format!("https://{}/actor",BASE_SERVER_URI),
+                "id": format!("https://{}/actor#main-key",BASE_SERVER_DOMAIN),
+                "owner":  format!("https://{}/actor",BASE_SERVER_DOMAIN),
                 "publicKeyPem": PUBLIC_ACTOR_KEY
             }
         }
@@ -95,6 +96,7 @@ async fn person_handler() -> impl IntoResponse {
 }
 
 const ACITIVITY_ACADEMY: &str = "activitypub.academy";
+// Reply Note id
 const REPLY_TO: &str = "https://activitypub.academy/@dabolia_ornorgliol/113233379073385013";
 
 #[tracing::instrument]
@@ -104,15 +106,15 @@ async fn post_note() {
         {
             "@context": "https://www.w3.org/ns/activitystreams",
 
-            "id": format!("https://{}/create-hello-world-my-server",BASE_SERVER_URI),
+            "id": format!("https://{}/create-hello-world-my-server",BASE_SERVER_DOMAIN),
             "type": "Create",
-            "actor": format!("https://{}/actor",BASE_SERVER_URI),
+            "actor": format!("https://{}/actor",BASE_SERVER_DOMAIN),
 
             "object": {
-                "id": format!("https://{}/hello-world-my-server",BASE_SERVER_URI),
+                "id": format!("https://{}/hello-world-my-server",BASE_SERVER_DOMAIN),
                 "type": "Note",
                 "published": "2018-06-23T17:17:11Z",
-                "attributedTo": format!("https://{}/actor",BASE_SERVER_URI),
+                "attributedTo": format!("https://{}/actor",BASE_SERVER_DOMAIN),
                 "inReplyTo": REPLY_TO,
                 "content": "<p>Hello world from my server</p>",
                 "to": "https://www.w3.org/ns/activitystreams#Public"
@@ -124,11 +126,12 @@ async fn post_note() {
     let rsa_private_key = Rsa::private_key_from_pem(PRIVATE_ACTOR_KEY.as_bytes()).unwrap();
     let pkey = PKey::from_rsa(rsa_private_key).unwrap();
 
-    // https://scrapbox.io/activitypub/HTTP_Signatures
-    // Mastdonではアクティビティ自体のダイジェストも必要らしい
+    // Mastdon needs activity digest hash
+    // https://docs.joinmastodon.org/spec/security/#digest
     let digest = openssl::hash::hash(MessageDigest::sha256(), document.as_bytes()).unwrap();
     let digest_64 = format!("SHA-256={}", openssl::base64::encode_block(digest.as_ref()));
-
+    
+    // https://docs.joinmastodon.org/spec/security/#http
     let date = httpdate::fmt_http_date(SystemTime::now());
 
     // HTTP Signature
@@ -146,17 +149,19 @@ async fn post_note() {
 
     let header = format!(
         r#"keyId="https://{}/actor",algorithm="rsa-sha256",headers="(request-target) host date digest",signature="{}""#,
-        BASE_SERVER_URI, signature_64
+        BASE_SERVER_DOMAIN, signature_64
     );
 
     let mut headers = header::HeaderMap::new();
-    // headers.insert(
-    //     header::CONTENT_TYPE,
-    //     HeaderValue::from_static(ACITIVITY_JSON),
-    // );
-    // headers.insert(header::ACCEPT, HeaderValue::from_static(ACITIVITY_JSON));
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(ACITIVITY_JSON),
+    );
+    headers.insert(header::ACCEPT, HeaderValue::from_static(ACITIVITY_JSON));
     headers.insert(header::HOST, HeaderValue::from_static(ACITIVITY_ACADEMY));
     headers.insert(header::DATE, HeaderValue::from_str(&date).unwrap());
+    // HeaderName::from_static needs lowercase character
+    // https://docs.rs/http/latest/http/header/struct.HeaderName.html#method.from_static
     headers.insert(
         header::HeaderName::from_static("signature"),
         HeaderValue::from_str(&header).unwrap(),
