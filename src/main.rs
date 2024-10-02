@@ -6,10 +6,10 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use openssl::{hash::{self, MessageDigest}, rsa::Padding};
 use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
-use openssl::sign::{Signer, Verifier};
+use openssl::sign::Signer;
+use openssl::{hash::MessageDigest, rsa::Padding};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{normalize_path::NormalizePathLayer, timeout::TimeoutLayer, trace::TraceLayer};
