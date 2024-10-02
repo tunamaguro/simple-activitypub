@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::SystemTime;
 
 use axum::{
     http::{header, HeaderValue},
@@ -6,11 +6,15 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use openssl::{hash::{self, MessageDigest}, rsa::Padding};
+use openssl::pkey::PKey;
+use openssl::rsa::Rsa;
+use openssl::sign::{Signer, Verifier};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{normalize_path::NormalizePathLayer, timeout::TimeoutLayer, trace::TraceLayer};
 
-const BASE_SERVER_URI: &str = "c0becd579a6677ee42ce067be08e544d.serveo.net";
+const BASE_SERVER_URI: &str = "5200a6a749126c34a365ad5ce6095572.serveo.net";
 
 #[tracing::instrument]
 #[axum_macros::debug_handler]
@@ -50,9 +54,13 @@ async fn webfinger() -> impl IntoResponse {
 
     Json(res)
 }
+
+const ACITIVITY_JSON: &str = "application/activity+json";
+
 // NOTE: Do not use these implementation at production!!
 const PUBLIC_ACTOR_KEY: &str = include_str!("./actorKey/public.pem");
 const PRIVATE_ACTOR_KEY: &str = include_str!("./actorKey/private.pem");
+
 #[tracing::instrument]
 #[axum_macros::debug_handler]
 async fn person_handler() -> impl IntoResponse {
@@ -80,10 +88,102 @@ async fn person_handler() -> impl IntoResponse {
     (
         [(
             header::CONTENT_TYPE,
-            HeaderValue::from_static("application/activity+json"),
+            HeaderValue::from_static(ACITIVITY_JSON),
         )],
         Json(res),
     )
+}
+
+const ACITIVITY_ACADEMY: &str = "activitypub.academy";
+const REPLY_TO: &str = "https://activitypub.academy/@dabolia_ornorgliol/113233379073385013";
+
+#[tracing::instrument]
+#[axum_macros::debug_handler]
+async fn post_note() {
+    let document = serde_json::json!(
+        {
+            "@context": "https://www.w3.org/ns/activitystreams",
+
+            "id": format!("https://{}/create-hello-world-my-server",BASE_SERVER_URI),
+            "type": "Create",
+            "actor": format!("https://{}/actor",BASE_SERVER_URI),
+
+            "object": {
+                "id": format!("https://{}/hello-world-my-server",BASE_SERVER_URI),
+                "type": "Note",
+                "published": "2018-06-23T17:17:11Z",
+                "attributedTo": format!("https://{}/actor",BASE_SERVER_URI),
+                "inReplyTo": REPLY_TO,
+                "content": "<p>Hello world from my server</p>",
+                "to": "https://www.w3.org/ns/activitystreams#Public"
+            }
+        }
+    );
+    let document = document.to_string();
+
+    let rsa_private_key = Rsa::private_key_from_pem(PRIVATE_ACTOR_KEY.as_bytes()).unwrap();
+    let pkey = PKey::from_rsa(rsa_private_key).unwrap();
+
+    // https://scrapbox.io/activitypub/HTTP_Signatures
+    // Mastdonではアクティビティ自体のダイジェストも必要らしい
+    let digest = openssl::hash::hash(MessageDigest::sha256(), document.as_bytes()).unwrap();
+    let digest_64 = format!("SHA-256={}", openssl::base64::encode_block(digest.as_ref()));
+
+    let date = httpdate::fmt_http_date(SystemTime::now());
+
+    // HTTP Signature
+    let mut signer = Signer::new(MessageDigest::sha256(), &pkey).unwrap();
+    signer.set_rsa_padding(Padding::PKCS1).unwrap();
+    let signed_string = format!(
+        "(request-target): post /inbox\nhost: {}\ndate: {}\ndigest: {}",
+        ACITIVITY_ACADEMY, date, digest_64
+    );
+
+    let signature = signer
+        .sign_oneshot_to_vec(signed_string.as_bytes())
+        .unwrap();
+    let signature_64 = openssl::base64::encode_block(&signature);
+
+    let header = format!(
+        r#"keyId="https://{}/actor",algorithm="rsa-sha256",headers="(request-target) host date digest",signature="{}""#,
+        BASE_SERVER_URI, signature_64
+    );
+
+    let mut headers = header::HeaderMap::new();
+    // headers.insert(
+    //     header::CONTENT_TYPE,
+    //     HeaderValue::from_static(ACITIVITY_JSON),
+    // );
+    // headers.insert(header::ACCEPT, HeaderValue::from_static(ACITIVITY_JSON));
+    headers.insert(header::HOST, HeaderValue::from_static(ACITIVITY_ACADEMY));
+    headers.insert(header::DATE, HeaderValue::from_str(&date).unwrap());
+    headers.insert(
+        header::HeaderName::from_static("signature"),
+        HeaderValue::from_str(&header).unwrap(),
+    );
+    headers.insert(
+        header::HeaderName::from_static("digest"),
+        HeaderValue::from_str(&digest_64).unwrap(),
+    );
+
+    tracing::trace!(?headers);
+
+    let res = reqwest::Client::new()
+        .post("https://activitypub.academy/inbox")
+        .headers(headers)
+        .body(document)
+        .send()
+        .await;
+
+    match res {
+        Ok(res) => {
+            let text = res.text().await;
+            tracing::info!(?text)
+        }
+        Err(err) => {
+            tracing::error!(?err)
+        }
+    };
 }
 
 #[tokio::main]
@@ -91,6 +191,7 @@ async fn main() {
     init_tracing();
 
     let app = Router::new()
+        .route("/send-note", get(post_note))
         .route("/host-meta", get(host_meta))
         .route("/.well-known/webfinger", get(webfinger))
         .route("/actor", get(person_handler))
@@ -98,7 +199,7 @@ async fn main() {
             ServiceBuilder::new()
                 .layer(NormalizePathLayer::trim_trailing_slash())
                 .layer(TraceLayer::new_for_http())
-                .layer(TimeoutLayer::new(Duration::from_secs(10))),
+                .layer(TimeoutLayer::new(std::time::Duration::from_secs(10))),
         );
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
